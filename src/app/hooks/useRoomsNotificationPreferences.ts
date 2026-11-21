@@ -167,3 +167,37 @@ export const useSetRoomNotificationPreference = (roomId: string) => {
     setMode,
   };
 };
+
+/**
+ * Mute or unmute many rooms at once (e.g. every room in a space).
+ * Muting keeps already muted rooms untouched; unmuting resets only muted rooms to default.
+ * Requests run sequentially to stay under homeserver rate limits.
+ */
+export const useToggleRoomsMute = (roomIds: string[]) => {
+  const mx = useMatrixClient();
+  const preferences = useRoomsNotificationPreferencesContext();
+
+  const allMuted = roomIds.length > 0 && roomIds.every((roomId) => preferences.mute.has(roomId));
+
+  const [toggleState, toggleMute] = useAsyncCallback(
+    useCallback(async () => {
+      const mute = !allMuted;
+      await roomIds.reduce(async (previous, roomId) => {
+        await previous;
+        const currentMode = getRoomNotificationMode(preferences, roomId);
+        if (mute && currentMode !== RoomNotificationMode.Mute) {
+          await setRoomNotificationPreference(mx, roomId, RoomNotificationMode.Mute, currentMode);
+        }
+        if (!mute && currentMode === RoomNotificationMode.Mute) {
+          await setRoomNotificationPreference(mx, roomId, RoomNotificationMode.Unset, currentMode);
+        }
+      }, Promise.resolve());
+    }, [mx, roomIds, preferences, allMuted])
+  );
+
+  return {
+    allMuted,
+    toggleState,
+    toggleMute,
+  };
+};
