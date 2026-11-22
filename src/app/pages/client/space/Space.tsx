@@ -401,7 +401,7 @@ export function SpaceTombstone({ roomId, replacementRoomId }: SpaceTombstoneProp
 }
 
 type SpaceNavEntry =
-  | { type: 'category'; id: string; name: string }
+  | { type: 'category'; id: string; name: string; divider?: boolean }
   | { type: 'room'; roomId: string };
 
 export function Space() {
@@ -465,12 +465,14 @@ export function Space() {
   );
 
   // Favourites on top (like pinned chats), then either the space structure or all rooms
-  // of the space (including sub-spaces) sorted by latest activity.
+  // of the space (including sub-spaces) sorted by latest activity: groups first, then
+  // direct messages, separated by a divider.
   const entries = useMemo(() => {
     const list: SpaceNavEntry[] = [];
     const pushRooms = (categoryId: string, name: string, roomIds: string[]) => {
+      if (roomIds.length === 0) return;
       const closed = closedCategories.has(categoryId);
-      list.push({ type: 'category', id: categoryId, name });
+      list.push({ type: 'category', id: categoryId, name, divider: list.length > 0 });
       roomIds
         .sort(byActivity)
         .filter(
@@ -490,10 +492,16 @@ export function Space() {
     }
 
     if (sortByActivity) {
+      const otherIds = roomIds.filter((roomId) => !favouriteRooms.has(roomId));
       pushRooms(
         makeNavCategoryId(space.roomId, space.roomId),
-        'Rooms',
-        roomIds.filter((roomId) => !favouriteRooms.has(roomId))
+        'Groups',
+        otherIds.filter((roomId) => !mDirects.has(roomId))
+      );
+      pushRooms(
+        makeNavCategoryId(space.roomId, 'direct'),
+        'Direct Messages',
+        otherIds.filter((roomId) => mDirects.has(roomId))
       );
       return list;
     }
@@ -518,6 +526,7 @@ export function Space() {
     descendants,
     hierarchy,
     favouriteRooms,
+    mDirects,
     sortByActivity,
     closedCategories,
     roomToUnread,
@@ -603,6 +612,13 @@ export function Space() {
                     ref={virtualizer.measureElement}
                   >
                     <div style={{ paddingTop: vItem.index === 0 ? undefined : config.space.S400 }}>
+                      {entry.divider && (
+                        <Line
+                          variant="Surface"
+                          size="300"
+                          style={{ marginBottom: config.space.S300 }}
+                        />
+                      )}
                       <NavCategoryHeader>
                         <RoomNavCategoryButton
                           data-category-id={entry.id}
