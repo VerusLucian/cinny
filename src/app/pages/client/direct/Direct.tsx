@@ -19,7 +19,6 @@ import { useVirtualizer } from '@tanstack/react-virtual';
 import FocusTrap from 'focus-trap-react';
 import { useNavigate } from 'react-router-dom';
 import { useMatrixClient } from '../../../hooks/useMatrixClient';
-import { factoryRoomIdByActivity } from '../../../utils/sort';
 import {
   NavButton,
   NavCategory,
@@ -51,6 +50,7 @@ import {
   getRoomNotificationMode,
   useRoomsNotificationPreferencesContext,
 } from '../../../hooks/useRoomsNotificationPreferences';
+import { useRoomActivitySort } from '../../../hooks/useRoomActivitySort';
 import { useDirectCreateSelected } from '../../../hooks/router/useDirectSelected';
 
 type DirectMenuProps = {
@@ -182,6 +182,7 @@ export function Direct() {
   const favouriteRooms = useAtomValue(favouriteRoomsAtom);
   const notificationPreferences = useRoomsNotificationPreferencesContext();
   const roomToUnread = useAtomValue(roomToUnreadAtom);
+  const byActivity = useRoomActivitySort();
   const navigate = useNavigate();
 
   const createDirectSelected = useDirectCreateSelected();
@@ -202,7 +203,7 @@ export function Direct() {
 
   const virtualItems = useMemo(() => {
     const makeDirectList = (roomIds: string[], closed: boolean): string[] => {
-      const sorted = Array.from(roomIds).sort(factoryRoomIdByActivity(mx));
+      const sorted = Array.from(roomIds).sort(byActivity);
       return closed
         ? sorted.filter((rId) => roomToUnread.has(rId) || rId === selectedRoomId)
         : sorted;
@@ -227,7 +228,7 @@ export function Direct() {
     }
 
     return items;
-  }, [mx, favouriteRoomIds, otherRoomIds, closedCategories, roomToUnread, selectedRoomId]);
+  }, [favouriteRoomIds, otherRoomIds, closedCategories, roomToUnread, selectedRoomId, byActivity]);
 
   const virtualizer = useVirtualizer({
     count: virtualItems.length,

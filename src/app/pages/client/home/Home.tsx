@@ -18,7 +18,6 @@ import {
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { useAtom, useAtomValue } from 'jotai';
 import FocusTrap from 'focus-trap-react';
-import { factoryRoomIdByActivity, factoryRoomIdByAtoZ } from '../../../utils/sort';
 import {
   NavButton,
   NavCategory,
@@ -65,6 +64,7 @@ import {
   getRoomNotificationMode,
   useRoomsNotificationPreferencesContext,
 } from '../../../hooks/useRoomsNotificationPreferences';
+import { useRoomActivitySort } from '../../../hooks/useRoomActivitySort';
 import { UseStateProvider } from '../../../components/UseStateProvider';
 import { JoinAddressPrompt } from '../../../components/join-address-prompt';
 import { _RoomSearchParams } from '../../paths';
@@ -212,6 +212,7 @@ export function Home() {
   const mDirects = useAtomValue(mDirectAtom);
   const notificationPreferences = useRoomsNotificationPreferencesContext();
   const roomToUnread = useAtomValue(roomToUnreadAtom);
+  const byActivity = useRoomActivitySort();
   const navigate = useNavigate();
 
   const selectedRoomId = useSelectedRoom();
@@ -238,9 +239,7 @@ export function Home() {
 
   const virtualItems = useMemo(() => {
     const makeRoomList = (roomIds: string[], closed: boolean): string[] => {
-      const sorted = Array.from(roomIds).sort(
-        closed ? factoryRoomIdByActivity(mx) : factoryRoomIdByAtoZ(mx)
-      );
+      const sorted = Array.from(roomIds).sort(byActivity);
       return closed
         ? sorted.filter((rId) => roomToUnread.has(rId) || rId === selectedRoomId)
         : sorted;
@@ -263,7 +262,7 @@ export function Home() {
     }
 
     return items;
-  }, [mx, favouriteRoomIds, otherRoomIds, closedCategories, roomToUnread, selectedRoomId]);
+  }, [favouriteRoomIds, otherRoomIds, closedCategories, roomToUnread, selectedRoomId, byActivity]);
 
   const virtualizer = useVirtualizer({
     count: virtualItems.length,

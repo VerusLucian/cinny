@@ -60,6 +60,8 @@ import { usePowerLevels } from '../../../hooks/usePowerLevels';
 import { useRecursiveChildScopeFactory, useSpaceChildren } from '../../../state/hooks/roomList';
 import { roomToParentsAtom } from '../../../state/room/roomToParents';
 import { markAsRead } from '../../../utils/notifications';
+import { favouriteRoomsAtom } from '../../../state/room/favouriteRooms';
+import { activitySortedSpacesAtom } from '../../../state/spaceRoomSort';
 import { useRoomsUnread } from '../../../state/hooks/unread';
 import { UseStateProvider } from '../../../components/UseStateProvider';
 import { LeaveSpacePrompt } from '../../../components/leave-space-prompt';
@@ -76,6 +78,7 @@ import {
   getRoomNotificationMode,
   useRoomsNotificationPreferencesContext,
 } from '../../../hooks/useRoomsNotificationPreferences';
+import { useRoomActivitySort } from '../../../hooks/useRoomActivitySort';
 import { useOpenSpaceSettings } from '../../../state/hooks/spaceSettings';
 import { useRoomNavigate } from '../../../hooks/useRoomNavigate';
 import { useRoomCreators } from '../../../hooks/useRoomCreators';
@@ -105,6 +108,8 @@ const SpaceMenu = forwardRef<HTMLDivElement, SpaceMenuProps>(({ room, requestClo
   const { navigateRoom } = useRoomNavigate();
 
   const [invitePrompt, setInvitePrompt] = useState(false);
+  const [activitySortedSpaces, setActivitySortedSpaces] = useAtom(activitySortedSpacesAtom);
+  const sortByActivity = activitySortedSpaces.has(room.roomId);
 
   const allChild = useSpaceChildren(
     allRoomsAtom,
@@ -115,6 +120,14 @@ const SpaceMenu = forwardRef<HTMLDivElement, SpaceMenuProps>(({ room, requestClo
 
   const handleMarkAsRead = () => {
     allChild.forEach((childRoomId) => markAsRead(mx, childRoomId, hideActivity));
+    requestClose();
+  };
+
+  const handleToggleSort = () => {
+    const next = new Set(activitySortedSpaces);
+    if (sortByActivity) next.delete(room.roomId);
+    else next.add(room.roomId);
+    setActivitySortedSpaces(next);
     requestClose();
   };
 
@@ -163,6 +176,16 @@ const SpaceMenu = forwardRef<HTMLDivElement, SpaceMenuProps>(({ room, requestClo
           </Text>
         </MenuItem>
         <SpaceMuteMenuItem spaceId={room.roomId} roomIds={allChild} requestClose={requestClose} />
+        <MenuItem
+          onClick={handleToggleSort}
+          size="300"
+          after={<Icon size="100" src={sortByActivity ? Icons.OrderList : Icons.RecentClock} />}
+          radii="300"
+        >
+          <Text style={{ flexGrow: 1 }} as="span" size="T300" truncate>
+            {sortByActivity ? 'Sort by Space Order' : 'Sort by Activity'}
+          </Text>
+        </MenuItem>
       </Box>
       <Line variant="Surface" size="300" />
       <Box direction="Column" gap="100" style={{ padding: config.space.S100 }}>
@@ -377,6 +400,10 @@ export function SpaceTombstone({ roomId, replacementRoomId }: SpaceTombstoneProp
   );
 }
 
+type SpaceNavEntry =
+  | { type: 'category'; id: string; name: string }
+  | { type: 'room'; roomId: string };
+
 export function Space() {
   const mx = useMatrixClient();
   const space = useSpace();
@@ -385,6 +412,7 @@ export function Space() {
   const scrollRef = useRef<HTMLDivElement>(null);
   const mDirects = useAtomValue(mDirectAtom);
   const roomToUnread = useAtomValue(roomToUnreadAtom);
+  const byActivity = useRoomActivitySort();
   const allRooms = useAtomValue(allRoomsAtom);
   const allJoinedRooms = useMemo(() => new Set(allRooms), [allRooms]);
   const notificationPreferences = useRoomsNotificationPreferencesContext();
@@ -427,8 +455,79 @@ export function Space() {
     )
   );
 
+  const favouriteRooms = useAtomValue(favouriteRoomsAtom);
+  const sortByActivity = useAtomValue(activitySortedSpacesAtom).has(space.roomId);
+  const roomToParents = useAtomValue(roomToParentsAtom);
+  const descendants = useSpaceChildren(
+    allRoomsAtom,
+    space.roomId,
+    useRecursiveChildScopeFactory(mx, roomToParents)
+  );
+
+  // Favourites on top (like pinned chats), then either the space structure or all rooms
+  // of the space (including sub-spaces) sorted by latest activity.
+  const entries = useMemo(() => {
+    const list: SpaceNavEntry[] = [];
+    const pushRooms = (categoryId: string, name: string, roomIds: string[]) => {
+      const closed = closedCategories.has(categoryId);
+      list.push({ type: 'category', id: categoryId, name });
+      roomIds
+        .sort(byActivity)
+        .filter(
+          (roomId) =>
+            !closed ||
+            roomToUnread.has(roomId) ||
+            roomId === selectedRoomId ||
+            callEmbed?.roomId === roomId
+        )
+        .forEach((roomId) => list.push({ type: 'room', roomId }));
+    };
+
+    const roomIds = descendants.filter((roomId) => !mx.getRoom(roomId)?.isSpaceRoom());
+    const favouriteIds = roomIds.filter((roomId) => favouriteRooms.has(roomId));
+    if (favouriteIds.length > 0) {
+      pushRooms(makeNavCategoryId(space.roomId, 'favourite'), 'Favourites', favouriteIds);
+    }
+
+    if (sortByActivity) {
+      pushRooms(
+        makeNavCategoryId(space.roomId, space.roomId),
+        'Rooms',
+        roomIds.filter((roomId) => !favouriteRooms.has(roomId))
+      );
+      return list;
+    }
+
+    hierarchy.forEach(({ roomId }) => {
+      const room = mx.getRoom(roomId);
+      if (!room) return;
+      if (room.isSpaceRoom()) {
+        list.push({
+          type: 'category',
+          id: makeNavCategoryId(space.roomId, roomId),
+          name: roomId === space.roomId ? 'Rooms' : room.name,
+        });
+        return;
+      }
+      if (!favouriteRooms.has(roomId)) list.push({ type: 'room', roomId });
+    });
+    return list;
+  }, [
+    mx,
+    space.roomId,
+    descendants,
+    hierarchy,
+    favouriteRooms,
+    sortByActivity,
+    closedCategories,
+    roomToUnread,
+    selectedRoomId,
+    callEmbed,
+    byActivity,
+  ]);
+
   const virtualizer = useVirtualizer({
-    count: hierarchy.length,
+    count: entries.length,
     getScrollElement: () => scrollRef.current,
     estimateSize: () => 0,
     overscan: 10,
@@ -493,13 +592,10 @@ export function Space() {
             }}
           >
             {virtualizer.getVirtualItems().map((vItem) => {
-              const { roomId } = hierarchy[vItem.index] ?? {};
-              const room = mx.getRoom(roomId);
-              if (!room) return null;
+              const entry = entries[vItem.index];
+              if (!entry) return null;
 
-              if (room.isSpaceRoom()) {
-                const categoryId = makeNavCategoryId(space.roomId, roomId);
-
+              if (entry.type === 'category') {
                 return (
                   <VirtualTile
                     virtualItem={vItem}
@@ -509,17 +605,21 @@ export function Space() {
                     <div style={{ paddingTop: vItem.index === 0 ? undefined : config.space.S400 }}>
                       <NavCategoryHeader>
                         <RoomNavCategoryButton
-                          data-category-id={categoryId}
+                          data-category-id={entry.id}
                           onClick={handleCategoryClick}
-                          closed={closedCategories.has(categoryId)}
+                          closed={closedCategories.has(entry.id)}
                         >
-                          {roomId === space.roomId ? 'Rooms' : room?.name}
+                          {entry.name}
                         </RoomNavCategoryButton>
                       </NavCategoryHeader>
                     </div>
                   </VirtualTile>
                 );
               }
+
+              const { roomId } = entry;
+              const room = mx.getRoom(roomId);
+              if (!room) return null;
 
               return (
                 <VirtualTile virtualItem={vItem} key={vItem.index} ref={virtualizer.measureElement}>
