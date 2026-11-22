@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { IRoomTimelineData, MatrixEvent, Room, RoomEvent } from 'matrix-js-sdk';
 import { useMatrixClient } from './useMatrixClient';
 import { factoryRoomIdByActivity, SortFunc } from '../utils/sort';
@@ -10,7 +10,7 @@ import { factoryRoomIdByActivity, SortFunc } from '../utils/sort';
  */
 export const useRoomActivitySort = (): SortFunc<string> => {
   const mx = useMatrixClient();
-  const [tick, setTick] = useState(0);
+  const [sort, setSort] = useState(() => factoryRoomIdByActivity(mx));
 
   useEffect(() => {
     let timeout: number | undefined;
@@ -24,7 +24,8 @@ export const useRoomActivitySort = (): SortFunc<string> => {
       if (!room || toStartOfTimeline || removed || !data.liveEvent || timeout) return;
       timeout = window.setTimeout(() => {
         timeout = undefined;
-        setTick((t) => t + 1);
+        // a fresh comparator identity makes memoized lists re-sort
+        setSort(() => factoryRoomIdByActivity(mx));
       }, 300);
     };
     mx.on(RoomEvent.Timeline, handleTimeline);
@@ -34,6 +35,5 @@ export const useRoomActivitySort = (): SortFunc<string> => {
     };
   }, [mx]);
 
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- tick is the re-sort trigger
-  return useMemo(() => factoryRoomIdByActivity(mx), [mx, tick]);
+  return sort;
 };
