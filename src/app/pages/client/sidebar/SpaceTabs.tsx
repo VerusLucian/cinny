@@ -93,7 +93,7 @@ import { useOpenSpaceSettings } from '../../../state/hooks/spaceSettings';
 import { useRoomCreators } from '../../../hooks/useRoomCreators';
 import { useRoomPermissions } from '../../../hooks/useRoomPermissions';
 import { InviteUserPrompt } from '../../../components/invite-user-prompt';
-import { RoomsMuteMenuItem } from '../../../components/RoomsMuteMenuItem';
+import { SpaceMuteMenuItem } from '../../../components/SpaceMuteMenuItem';
 
 type SpaceMenuProps = {
   room: Room;
@@ -170,7 +170,7 @@ const SpaceMenu = forwardRef<HTMLDivElement, SpaceMenuProps>(
               Mark as Read
             </Text>
           </MenuItem>
-          <RoomsMuteMenuItem roomIds={allChild} requestClose={requestClose} />
+          <SpaceMuteMenuItem spaceId={room.roomId} roomIds={allChild} requestClose={requestClose} />
           {onUnpin && (
             <MenuItem
               size="300"

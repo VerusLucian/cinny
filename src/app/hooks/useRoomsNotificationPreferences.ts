@@ -1,7 +1,12 @@
 import { createContext, useCallback, useContext, useMemo } from 'react';
-import { ConditionKind, IPushRules, MatrixClient, PushRuleKind } from 'matrix-js-sdk';
+import { ConditionKind, IPushRules, MatrixClient, MatrixError, PushRuleKind } from 'matrix-js-sdk';
 import { Icons, IconSrc } from 'folds';
-import { AccountDataEvent } from '../../types/matrix/accountData';
+import {
+  AccountDataEvent,
+  SPACE_MUTE_ACCOUNT_DATA,
+  SpaceMuteContent,
+} from '../../types/matrix/accountData';
+import { ErrorCode } from '../cs-errorcode';
 import { useAccountData } from './useAccountData';
 import { isRoomId } from '../utils/matrix';
 import {
@@ -107,6 +112,26 @@ export const getRoomNotificationModeIcon = (mode?: RoomNotificationMode): IconSr
   return Icons.Bell;
 };
 
+const addRoomMuteRule = (mx: MatrixClient, roomId: string) =>
+  mx.addPushRule('global', PushRuleKind.Override, roomId, {
+    conditions: [
+      {
+        kind: ConditionKind.EventMatch,
+        key: 'room_id',
+        pattern: roomId,
+      },
+    ],
+    actions: getNotificationModeActions(NotificationMode.OFF),
+  });
+
+const deletePushRuleIfExists = async (mx: MatrixClient, kind: PushRuleKind, roomId: string) => {
+  try {
+    await mx.deletePushRule('global', kind, roomId);
+  } catch (e) {
+    if (!(e instanceof MatrixError && e.errcode === ErrorCode.M_NOT_FOUND)) throw e;
+  }
+};
+
 export const setRoomNotificationPreference = async (
   mx: MatrixClient,
   roomId: string,
@@ -122,6 +147,10 @@ export const setRoomNotificationPreference = async (
   }
   if (previousMode === RoomNotificationMode.Mute) {
     await mx.deletePushRule('global', PushRuleKind.Override, roomId);
+    // A room muted together with its space keeps its own room rule underneath the mute.
+    if (mode === RoomNotificationMode.Unset) {
+      await deletePushRuleIfExists(mx, PushRuleKind.RoomSpecific, roomId);
+    }
   }
 
   // set new preference
@@ -130,16 +159,7 @@ export const setRoomNotificationPreference = async (
   }
 
   if (mode === RoomNotificationMode.Mute) {
-    await mx.addPushRule('global', PushRuleKind.Override, roomId, {
-      conditions: [
-        {
-          kind: ConditionKind.EventMatch,
-          key: 'room_id',
-          pattern: roomId,
-        },
-      ],
-      actions: getNotificationModeActions(NotificationMode.OFF),
-    });
+    await addRoomMuteRule(mx, roomId);
     return;
   }
 
@@ -168,12 +188,25 @@ export const useSetRoomNotificationPreference = (roomId: string) => {
   };
 };
 
+const runSequentially = (roomIds: string[], action: (roomId: string) => Promise<unknown>) =>
+  roomIds.reduce<Promise<void>>(async (previous, roomId) => {
+    await previous;
+    await action(roomId);
+  }, Promise.resolve());
+
+const isSpaceMuteContent = (content: object): content is SpaceMuteContent =>
+  Object.values(content).every(
+    (roomIds) => Array.isArray(roomIds) && roomIds.every((id) => typeof id === 'string')
+  );
+
 /**
- * Mute or unmute many rooms at once (e.g. every room in a space).
- * Muting keeps already muted rooms untouched; unmuting resets only muted rooms to default.
+ * Mute or unmute every room of a space at once.
+ * Muting only adds an override rule, so per-room "All Messages" / "Mention & Keywords" rules
+ * stay in place underneath and come back on unmute. Rooms muted by the space are recorded in
+ * account data, so unmuting leaves rooms that were muted individually before untouched.
  * Requests run sequentially to stay under homeserver rate limits.
  */
-export const useToggleRoomsMute = (roomIds: string[]) => {
+export const useToggleSpaceMute = (spaceId: string, roomIds: string[]) => {
   const mx = useMatrixClient();
   const preferences = useRoomsNotificationPreferencesContext();
 
@@ -181,18 +214,30 @@ export const useToggleRoomsMute = (roomIds: string[]) => {
 
   const [toggleState, toggleMute] = useAsyncCallback(
     useCallback(async () => {
-      const mute = !allMuted;
-      await roomIds.reduce(async (previous, roomId) => {
-        await previous;
-        const currentMode = getRoomNotificationMode(preferences, roomId);
-        if (mute && currentMode !== RoomNotificationMode.Mute) {
-          await setRoomNotificationPreference(mx, roomId, RoomNotificationMode.Mute, currentMode);
-        }
-        if (!mute && currentMode === RoomNotificationMode.Mute) {
-          await setRoomNotificationPreference(mx, roomId, RoomNotificationMode.Unset, currentMode);
-        }
-      }, Promise.resolve());
-    }, [mx, roomIds, preferences, allMuted])
+      const stored: object | undefined = mx.getAccountData(SPACE_MUTE_ACCOUNT_DATA)?.getContent();
+      const content: SpaceMuteContent = stored && isSpaceMuteContent(stored) ? stored : {};
+      const recorded = content[spaceId];
+
+      if (!allMuted) {
+        const toMute = roomIds.filter((roomId) => !preferences.mute.has(roomId));
+        // record before muting, so a partially failed mute can still be undone
+        await mx.setAccountData(SPACE_MUTE_ACCOUNT_DATA, {
+          ...content,
+          [spaceId]: Array.from(new Set([...(recorded ?? []), ...toMute])),
+        });
+        await runSequentially(toMute, (roomId) => addRoomMuteRule(mx, roomId));
+        return;
+      }
+
+      // without a record (muted by an older version or by hand) unmute every room of the space
+      const toUnmute = (recorded ?? roomIds).filter((roomId) => preferences.mute.has(roomId));
+      await runSequentially(toUnmute, (roomId) =>
+        deletePushRuleIfExists(mx, PushRuleKind.Override, roomId)
+      );
+      const newContent: SpaceMuteContent = { ...content };
+      delete newContent[spaceId];
+      await mx.setAccountData(SPACE_MUTE_ACCOUNT_DATA, newContent);
+    }, [mx, spaceId, roomIds, preferences, allMuted])
   );
 
   return {

@@ -20,6 +20,17 @@ export enum AccountDataEvent {
 
 export type MDirectContent = Record<string, string[]>;
 
+/** Account data type recording which rooms were muted by "Mute Rooms" in a space. */
+export const SPACE_MUTE_ACCOUNT_DATA = 'in.cinny.space_mute';
+/** space id -> ids of rooms muted together with that space */
+export type SpaceMuteContent = Record<string, string[]>;
+
+declare module 'matrix-js-sdk/lib/@types/event' {
+  interface AccountDataEvents {
+    [SPACE_MUTE_ACCOUNT_DATA]: SpaceMuteContent;
+  }
+}
+
 export type SecretStorageDefaultKeyContent = {
   key: string;
 };

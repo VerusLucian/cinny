@@ -1,15 +1,16 @@
 import React from 'react';
 import { Icon, Icons, MenuItem, Spinner, Text } from 'folds';
-import { useToggleRoomsMute } from '../hooks/useRoomsNotificationPreferences';
+import { useToggleSpaceMute } from '../hooks/useRoomsNotificationPreferences';
 import { AsyncStatus } from '../hooks/useAsyncCallback';
 
-type RoomsMuteMenuItemProps = {
+type SpaceMuteMenuItemProps = {
+  spaceId: string;
   roomIds: string[];
   requestClose: () => void;
 };
 
-export function RoomsMuteMenuItem({ roomIds, requestClose }: RoomsMuteMenuItemProps) {
-  const { allMuted, toggleState, toggleMute } = useToggleRoomsMute(roomIds);
+export function SpaceMuteMenuItem({ spaceId, roomIds, requestClose }: SpaceMuteMenuItemProps) {
+  const { allMuted, toggleState, toggleMute } = useToggleSpaceMute(spaceId, roomIds);
   const changing = toggleState.status === AsyncStatus.Loading;
   const failed = toggleState.status === AsyncStatus.Error;
 

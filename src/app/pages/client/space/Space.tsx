@@ -85,7 +85,7 @@ import { AsyncStatus, useAsyncCallback } from '../../../hooks/useAsyncCallback';
 import { BreakWord } from '../../../styles/Text.css';
 import { InviteUserPrompt } from '../../../components/invite-user-prompt';
 import { useCallEmbed } from '../../../hooks/useCallEmbed';
-import { RoomsMuteMenuItem } from '../../../components/RoomsMuteMenuItem';
+import { SpaceMuteMenuItem } from '../../../components/SpaceMuteMenuItem';
 
 type SpaceMenuProps = {
   room: Room;
@@ -162,7 +162,7 @@ const SpaceMenu = forwardRef<HTMLDivElement, SpaceMenuProps>(({ room, requestClo
             Mark as Read
           </Text>
         </MenuItem>
-        <RoomsMuteMenuItem roomIds={allChild} requestClose={requestClose} />
+        <SpaceMuteMenuItem spaceId={room.roomId} roomIds={allChild} requestClose={requestClose} />
       </Box>
       <Line variant="Surface" size="300" />
       <Box direction="Column" gap="100" style={{ padding: config.space.S100 }}>
