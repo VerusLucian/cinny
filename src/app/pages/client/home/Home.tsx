@@ -48,7 +48,7 @@ import { VirtualTile } from '../../../components/virtualizer';
 import { RoomNavCategoryButton, RoomNavItem } from '../../../features/room-nav';
 import { makeNavCategoryId } from '../../../state/closedNavCategories';
 import { roomToUnreadAtom } from '../../../state/room/roomToUnread';
-import { favouriteRoomsAtom } from '../../../state/room/favouriteRooms';
+import { archivedRoomsAtom, favouriteRoomsAtom } from '../../../state/room/favouriteRooms';
 import { allRoomsAtom } from '../../../state/room-list/roomList';
 import { mDirectAtom } from '../../../state/mDirectList';
 import { useCategoryHandler } from '../../../hooks/useCategoryHandler';
@@ -198,6 +198,8 @@ function HomeEmpty() {
 
 const DEFAULT_CATEGORY_ID = makeNavCategoryId('home', 'room');
 const FAVOURITE_CATEGORY_ID = makeNavCategoryId('home', 'favourite');
+// collapsed unless opened: presence in closedCategories means "open"
+const ARCHIVED_CATEGORY_ID = makeNavCategoryId('home', 'archived');
 
 type HomeVirtualItem =
   | { type: 'category'; id: string; name: string; closed: boolean }
@@ -208,6 +210,7 @@ export function Home() {
   const scrollRef = useRef<HTMLDivElement>(null);
   const rooms = useHomeRooms();
   const favouriteRooms = useAtomValue(favouriteRoomsAtom);
+  const archivedRooms = useAtomValue(archivedRoomsAtom);
   const allRooms = useAtomValue(allRoomsAtom);
   const mDirects = useAtomValue(mDirectAtom);
   const notificationPreferences = useRoomsNotificationPreferencesContext();
@@ -223,19 +226,27 @@ export function Home() {
   const favouriteRoomIds = useMemo(
     () =>
       allRooms.filter((roomId) => {
-        if (!favouriteRooms.has(roomId) || mDirects.has(roomId)) return false;
+        if (!favouriteRooms.has(roomId) || mDirects.has(roomId) || archivedRooms.has(roomId)) {
+          return false;
+        }
         const room = mx.getRoom(roomId);
         return !!room && !room.isSpaceRoom();
       }),
-    [mx, allRooms, favouriteRooms, mDirects]
+    [mx, allRooms, favouriteRooms, archivedRooms, mDirects]
   );
 
   const otherRoomIds = useMemo(
-    () => rooms.filter((roomId) => !favouriteRooms.has(roomId)),
-    [rooms, favouriteRooms]
+    () => rooms.filter((roomId) => !favouriteRooms.has(roomId) && !archivedRooms.has(roomId)),
+    [rooms, favouriteRooms, archivedRooms]
   );
 
-  const noRoomToDisplay = otherRoomIds.length === 0 && favouriteRoomIds.length === 0;
+  const archivedRoomIds = useMemo(
+    () => rooms.filter((roomId) => archivedRooms.has(roomId)),
+    [rooms, archivedRooms]
+  );
+
+  const noRoomToDisplay =
+    otherRoomIds.length === 0 && favouriteRoomIds.length === 0 && archivedRoomIds.length === 0;
 
   const virtualItems = useMemo(() => {
     const makeRoomList = (roomIds: string[], closed: boolean): string[] => {
@@ -261,8 +272,30 @@ export function Home() {
       makeRoomList(otherRoomIds, closed).forEach((roomId) => items.push({ type: 'room', roomId }));
     }
 
+    if (archivedRoomIds.length > 0) {
+      const closed = !closedCategories.has(ARCHIVED_CATEGORY_ID);
+      items.push({
+        type: 'category',
+        id: ARCHIVED_CATEGORY_ID,
+        name: `Archived (${archivedRoomIds.length})`,
+        closed,
+      });
+      Array.from(archivedRoomIds)
+        .sort(byActivity)
+        .filter((rId) => !closed || rId === selectedRoomId)
+        .forEach((roomId) => items.push({ type: 'room', roomId }));
+    }
+
     return items;
-  }, [favouriteRoomIds, otherRoomIds, closedCategories, roomToUnread, selectedRoomId, byActivity]);
+  }, [
+    favouriteRoomIds,
+    otherRoomIds,
+    archivedRoomIds,
+    closedCategories,
+    roomToUnread,
+    selectedRoomId,
+    byActivity,
+  ]);
 
   const virtualizer = useVirtualizer({
     count: virtualItems.length,

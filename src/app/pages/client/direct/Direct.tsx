@@ -35,7 +35,7 @@ import { VirtualTile } from '../../../components/virtualizer';
 import { RoomNavCategoryButton, RoomNavItem } from '../../../features/room-nav';
 import { makeNavCategoryId } from '../../../state/closedNavCategories';
 import { roomToUnreadAtom } from '../../../state/room/roomToUnread';
-import { favouriteRoomsAtom } from '../../../state/room/favouriteRooms';
+import { archivedRoomsAtom, favouriteRoomsAtom } from '../../../state/room/favouriteRooms';
 import { useCategoryHandler } from '../../../hooks/useCategoryHandler';
 import { useNavToActivePathMapper } from '../../../hooks/useNavToActivePathMapper';
 import { useDirectRooms } from './useDirectRooms';
@@ -170,6 +170,8 @@ function DirectEmpty() {
 
 const DEFAULT_CATEGORY_ID = makeNavCategoryId('direct', 'direct');
 const FAVOURITE_CATEGORY_ID = makeNavCategoryId('direct', 'favourite');
+// collapsed unless opened: presence in closedCategories means "open"
+const ARCHIVED_CATEGORY_ID = makeNavCategoryId('direct', 'archived');
 
 type DirectVirtualItem =
   | { type: 'category'; id: string; name: string; closed: boolean }
@@ -180,6 +182,7 @@ export function Direct() {
   const scrollRef = useRef<HTMLDivElement>(null);
   const directs = useDirectRooms();
   const favouriteRooms = useAtomValue(favouriteRoomsAtom);
+  const archivedRooms = useAtomValue(archivedRoomsAtom);
   const notificationPreferences = useRoomsNotificationPreferencesContext();
   const roomToUnread = useAtomValue(roomToUnreadAtom);
   const byActivity = useRoomActivitySort();
@@ -191,15 +194,17 @@ export function Direct() {
   const noRoomToDisplay = directs.length === 0;
   const [closedCategories, setClosedCategories] = useAtom(useClosedNavCategoriesAtom());
 
-  const [favouriteRoomIds, otherRoomIds] = useMemo(() => {
+  const [favouriteRoomIds, otherRoomIds, archivedRoomIds] = useMemo(() => {
     const favs: string[] = [];
     const others: string[] = [];
+    const archived: string[] = [];
     directs.forEach((roomId) => {
-      if (favouriteRooms.has(roomId)) favs.push(roomId);
+      if (archivedRooms.has(roomId)) archived.push(roomId);
+      else if (favouriteRooms.has(roomId)) favs.push(roomId);
       else others.push(roomId);
     });
-    return [favs, others];
-  }, [directs, favouriteRooms]);
+    return [favs, others, archived];
+  }, [directs, favouriteRooms, archivedRooms]);
 
   const virtualItems = useMemo(() => {
     const makeDirectList = (roomIds: string[], closed: boolean): string[] => {
@@ -227,8 +232,30 @@ export function Direct() {
       );
     }
 
+    if (archivedRoomIds.length > 0) {
+      const closed = !closedCategories.has(ARCHIVED_CATEGORY_ID);
+      items.push({
+        type: 'category',
+        id: ARCHIVED_CATEGORY_ID,
+        name: `Archived (${archivedRoomIds.length})`,
+        closed,
+      });
+      Array.from(archivedRoomIds)
+        .sort(byActivity)
+        .filter((rId) => !closed || rId === selectedRoomId)
+        .forEach((roomId) => items.push({ type: 'room', roomId }));
+    }
+
     return items;
-  }, [favouriteRoomIds, otherRoomIds, closedCategories, roomToUnread, selectedRoomId, byActivity]);
+  }, [
+    favouriteRoomIds,
+    otherRoomIds,
+    archivedRoomIds,
+    closedCategories,
+    roomToUnread,
+    selectedRoomId,
+    byActivity,
+  ]);
 
   const virtualizer = useVirtualizer({
     count: virtualItems.length,

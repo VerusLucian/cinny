@@ -3,7 +3,12 @@ import { allInvitesAtom, useBindAllInvitesAtom } from '../room-list/inviteList';
 import { allRoomsAtom, useBindAllRoomsAtom } from '../room-list/roomList';
 import { mDirectAtom, useBindMDirectAtom } from '../mDirectList';
 import { roomToUnreadAtom, useBindRoomToUnreadAtom } from '../room/roomToUnread';
-import { favouriteRoomsAtom, useBindFavouriteRoomsAtom } from '../room/favouriteRooms';
+import {
+  archivedRoomsAtom,
+  favouriteRoomsAtom,
+  useBindTaggedRoomsAtom,
+} from '../room/favouriteRooms';
+import { RoomTag } from '../../../types/matrix/room';
 import { roomToParentsAtom, useBindRoomToParentsAtom } from '../room/roomToParents';
 import { roomIdToTypingMembersAtom, useBindRoomIdToTypingMembersAtom } from '../typingMembers';
 
@@ -13,7 +18,8 @@ export const useBindAtoms = (mx: MatrixClient) => {
   useBindAllRoomsAtom(mx, allRoomsAtom);
   useBindRoomToParentsAtom(mx, roomToParentsAtom);
   useBindRoomToUnreadAtom(mx, roomToUnreadAtom);
-  useBindFavouriteRoomsAtom(mx, favouriteRoomsAtom);
+  useBindTaggedRoomsAtom(mx, favouriteRoomsAtom, RoomTag.Favourite);
+  useBindTaggedRoomsAtom(mx, archivedRoomsAtom, RoomTag.LowPriority);
 
   useBindRoomIdToTypingMembersAtom(mx, roomIdToTypingMembersAtom);
 };
