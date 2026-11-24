@@ -7,7 +7,7 @@ import { useMatrixClient } from '../../../hooks/useMatrixClient';
 import { JoinBeforeNavigate } from '../../../features/join-before-navigate';
 import { useHomeRooms } from './useHomeRooms';
 import { useSearchParamsViaServers } from '../../../hooks/router/useSearchParamsViaServers';
-import { favouriteRoomsAtom } from '../../../state/room/favouriteRooms';
+import { favouriteRoomsAtom } from '../../../state/room/taggedRooms';
 
 export function HomeRouteRoomProvider({ children }: { children: ReactNode }) {
   const mx = useMatrixClient();

@@ -1,4 +1,4 @@
-import React, { MouseEventHandler, forwardRef, useState } from 'react';
+import React, { MouseEventHandler, forwardRef, useCallback, useState } from 'react';
 import { Room } from 'matrix-js-sdk';
 import {
   Avatar,
@@ -16,6 +16,7 @@ import {
   RectCords,
   Badge,
   Spinner,
+  IconSrc,
 } from 'folds';
 import { useFocusWithin, useHover } from 'react-aria';
 import FocusTrap from 'focus-trap-react';
@@ -28,7 +29,7 @@ import { nameInitials } from '../../utils/common';
 import { useMatrixClient } from '../../hooks/useMatrixClient';
 import { useRoomUnread } from '../../state/hooks/unread';
 import { roomToUnreadAtom } from '../../state/room/roomToUnread';
-import { favouriteRoomsAtom } from '../../state/room/favouriteRooms';
+import { archivedRoomsAtom, favouriteRoomsAtom } from '../../state/room/taggedRooms';
 import { getPowersLevelFromMatrixEvent, usePowerLevels } from '../../hooks/usePowerLevels';
 import { copyToClipboard } from '../../utils/dom';
 import { markAsRead } from '../../utils/notifications';
@@ -61,7 +62,78 @@ import { useCallPreferencesAtom } from '../../state/hooks/callPreferences';
 import { useAutoDiscoveryInfo } from '../../hooks/useAutoDiscoveryInfo';
 import { livekitSupport } from '../../hooks/useLivekitSupport';
 import { RoomTag, StateEvent } from '../../../types/matrix/room';
+import { AsyncStatus, useAsyncCallback } from '../../hooks/useAsyncCallback';
 import { webRTCSupported } from '../../utils/rtc';
+
+type RoomTagMenuItemProps = {
+  roomId: string;
+  tag: RoomTag;
+  active: boolean;
+  /** Tag that cannot coexist with `tag`; removed when `tag` is added. */
+  conflictingTag: RoomTag;
+  conflictingActive: boolean;
+  label: string;
+  activeLabel: string;
+  icon: IconSrc;
+  requestClose: () => void;
+};
+function RoomTagMenuItem({
+  roomId,
+  tag,
+  active,
+  conflictingTag,
+  conflictingActive,
+  label,
+  activeLabel,
+  icon,
+  requestClose,
+}: RoomTagMenuItemProps) {
+  const mx = useMatrixClient();
+
+  const [toggleState, toggle] = useAsyncCallback(
+    useCallback(async () => {
+      if (active) {
+        await mx.deleteRoomTag(roomId, tag);
+        return;
+      }
+      await mx.setRoomTag(roomId, tag, {});
+      if (conflictingActive) await mx.deleteRoomTag(roomId, conflictingTag);
+    }, [mx, roomId, tag, active, conflictingTag, conflictingActive])
+  );
+  const changing = toggleState.status === AsyncStatus.Loading;
+  const failed = toggleState.status === AsyncStatus.Error;
+
+  const handleClick = () => {
+    toggle().then(requestClose, () => {
+      // failure is shown in the menu item
+    });
+  };
+
+  const text = active ? activeLabel : label;
+
+  return (
+    <MenuItem
+      onClick={handleClick}
+      size="300"
+      variant={failed ? 'Critical' : 'Surface'}
+      fill="None"
+      after={
+        changing ? (
+          <Spinner size="100" variant="Secondary" />
+        ) : (
+          <Icon size="100" src={icon} filled={active} />
+        )
+      }
+      radii="300"
+      aria-pressed={active}
+      disabled={changing}
+    >
+      <Text style={{ flexGrow: 1 }} as="span" size="T300" truncate>
+        {failed ? `${text} Failed` : text}
+      </Text>
+    </MenuItem>
+  );
+}
 
 type RoomNavItemMenuProps = {
   room: Room;
@@ -80,8 +152,8 @@ const RoomNavItemMenu = forwardRef<HTMLDivElement, RoomNavItemMenuProps>(
     const canInvite = permissions.action('invite', mx.getSafeUserId());
     const openRoomSettings = useOpenRoomSettings();
     const space = useSpaceOptionally();
-    const favouriteRooms = useAtomValue(favouriteRoomsAtom);
-    const favourite = favouriteRooms.has(room.roomId);
+    const favourite = useAtomValue(favouriteRoomsAtom).has(room.roomId);
+    const archived = useAtomValue(archivedRoomsAtom).has(room.roomId);
 
     const [invitePrompt, setInvitePrompt] = useState(false);
 
@@ -106,14 +178,6 @@ const RoomNavItemMenu = forwardRef<HTMLDivElement, RoomNavItemMenuProps>(
       requestClose();
     };
 
-    const handleToggleFavourite = () => {
-      const promise = favourite
-        ? mx.deleteRoomTag(room.roomId, RoomTag.Favourite)
-        : mx.setRoomTag(room.roomId, RoomTag.Favourite, {});
-      promise.catch(() => undefined);
-      requestClose();
-    };
-
     return (
       <Menu ref={ref} style={{ maxWidth: toRem(160), width: '100vw' }}>
         {invitePrompt && room && (
@@ -126,17 +190,28 @@ const RoomNavItemMenu = forwardRef<HTMLDivElement, RoomNavItemMenuProps>(
           />
         )}
         <Box direction="Column" gap="100" style={{ padding: config.space.S100 }}>
-          <MenuItem
-            onClick={handleToggleFavourite}
-            size="300"
-            after={<Icon size="100" src={Icons.Star} filled={favourite} />}
-            radii="300"
-            aria-pressed={favourite}
-          >
-            <Text style={{ flexGrow: 1 }} as="span" size="T300" truncate>
-              {favourite ? 'Remove from Favourites' : 'Add to Favourites'}
-            </Text>
-          </MenuItem>
+          <RoomTagMenuItem
+            roomId={room.roomId}
+            tag={RoomTag.Favourite}
+            active={favourite}
+            conflictingTag={RoomTag.LowPriority}
+            conflictingActive={archived}
+            label="Add to Favourites"
+            activeLabel="Remove from Favourites"
+            icon={Icons.Star}
+            requestClose={requestClose}
+          />
+          <RoomTagMenuItem
+            roomId={room.roomId}
+            tag={RoomTag.LowPriority}
+            active={archived}
+            conflictingTag={RoomTag.Favourite}
+            conflictingActive={favourite}
+            label="Archive"
+            activeLabel="Unarchive"
+            icon={Icons.Inbox}
+            requestClose={requestClose}
+          />
           <MenuItem
             onClick={handleMarkAsRead}
             size="300"

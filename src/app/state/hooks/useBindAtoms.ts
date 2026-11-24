@@ -3,11 +3,7 @@ import { allInvitesAtom, useBindAllInvitesAtom } from '../room-list/inviteList';
 import { allRoomsAtom, useBindAllRoomsAtom } from '../room-list/roomList';
 import { mDirectAtom, useBindMDirectAtom } from '../mDirectList';
 import { roomToUnreadAtom, useBindRoomToUnreadAtom } from '../room/roomToUnread';
-import {
-  archivedRoomsAtom,
-  favouriteRoomsAtom,
-  useBindTaggedRoomsAtom,
-} from '../room/favouriteRooms';
+import { archivedRoomsAtom, favouriteRoomsAtom, useBindTaggedRoomsAtom } from '../room/taggedRooms';
 import { RoomTag } from '../../../types/matrix/room';
 import { roomToParentsAtom, useBindRoomToParentsAtom } from '../room/roomToParents';
 import { roomIdToTypingMembersAtom, useBindRoomIdToTypingMembersAtom } from '../typingMembers';

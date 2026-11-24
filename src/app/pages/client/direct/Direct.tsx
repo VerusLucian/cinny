@@ -1,5 +1,5 @@
 import React, { MouseEventHandler, forwardRef, useMemo, useRef, useState } from 'react';
-import { useAtom, useAtomValue } from 'jotai';
+import { useAtomValue } from 'jotai';
 import {
   Avatar,
   Box,
@@ -35,12 +35,11 @@ import { VirtualTile } from '../../../components/virtualizer';
 import { RoomNavCategoryButton, RoomNavItem } from '../../../features/room-nav';
 import { makeNavCategoryId } from '../../../state/closedNavCategories';
 import { roomToUnreadAtom } from '../../../state/room/roomToUnread';
-import { archivedRoomsAtom, favouriteRoomsAtom } from '../../../state/room/favouriteRooms';
-import { useCategoryHandler } from '../../../hooks/useCategoryHandler';
+import { archivedRoomsAtom, favouriteRoomsAtom } from '../../../state/room/taggedRooms';
 import { useNavToActivePathMapper } from '../../../hooks/useNavToActivePathMapper';
 import { useDirectRooms } from './useDirectRooms';
 import { PageNav, PageNavContent, PageNavHeader } from '../../../components/page';
-import { useClosedNavCategoriesAtom } from '../../../state/hooks/closedNavCategories';
+import { useNavCategories } from '../../../state/hooks/closedNavCategories';
 import { useRoomsUnread } from '../../../state/hooks/unread';
 import { markAsRead } from '../../../utils/notifications';
 import { stopPropagation } from '../../../utils/keyboard';
@@ -170,7 +169,7 @@ function DirectEmpty() {
 
 const DEFAULT_CATEGORY_ID = makeNavCategoryId('direct', 'direct');
 const FAVOURITE_CATEGORY_ID = makeNavCategoryId('direct', 'favourite');
-// collapsed unless opened: presence in closedCategories means "open"
+// collapsed by default
 const ARCHIVED_CATEGORY_ID = makeNavCategoryId('direct', 'archived');
 
 type DirectVirtualItem =
@@ -192,7 +191,7 @@ export function Direct() {
 
   const selectedRoomId = useSelectedRoom();
   const noRoomToDisplay = directs.length === 0;
-  const [closedCategories, setClosedCategories] = useAtom(useClosedNavCategoriesAtom());
+  const { isClosed, handleCategoryClick } = useNavCategories();
 
   const [favouriteRoomIds, otherRoomIds, archivedRoomIds] = useMemo(() => {
     const favs: string[] = [];
@@ -217,7 +216,7 @@ export function Direct() {
     const items: DirectVirtualItem[] = [];
 
     if (favouriteRoomIds.length > 0) {
-      const closed = closedCategories.has(FAVOURITE_CATEGORY_ID);
+      const closed = isClosed(FAVOURITE_CATEGORY_ID);
       items.push({ type: 'category', id: FAVOURITE_CATEGORY_ID, name: 'Favourites', closed });
       makeDirectList(favouriteRoomIds, closed).forEach((roomId) =>
         items.push({ type: 'room', roomId })
@@ -225,7 +224,7 @@ export function Direct() {
     }
 
     if (otherRoomIds.length > 0 || favouriteRoomIds.length === 0) {
-      const closed = closedCategories.has(DEFAULT_CATEGORY_ID);
+      const closed = isClosed(DEFAULT_CATEGORY_ID);
       items.push({ type: 'category', id: DEFAULT_CATEGORY_ID, name: 'Chats', closed });
       makeDirectList(otherRoomIds, closed).forEach((roomId) =>
         items.push({ type: 'room', roomId })
@@ -233,7 +232,7 @@ export function Direct() {
     }
 
     if (archivedRoomIds.length > 0) {
-      const closed = !closedCategories.has(ARCHIVED_CATEGORY_ID);
+      const closed = isClosed(ARCHIVED_CATEGORY_ID, true);
       items.push({
         type: 'category',
         id: ARCHIVED_CATEGORY_ID,
@@ -251,7 +250,7 @@ export function Direct() {
     favouriteRoomIds,
     otherRoomIds,
     archivedRoomIds,
-    closedCategories,
+    isClosed,
     roomToUnread,
     selectedRoomId,
     byActivity,
@@ -260,13 +259,14 @@ export function Direct() {
   const virtualizer = useVirtualizer({
     count: virtualItems.length,
     getScrollElement: () => scrollRef.current,
+    // key rows by content, so per-row state (e.g. an open menu) never moves to another room
+    getItemKey: (index) => {
+      const item = virtualItems[index];
+      return item.type === 'category' ? item.id : item.roomId;
+    },
     estimateSize: () => 38,
     overscan: 10,
   });
-
-  const handleCategoryClick = useCategoryHandler(setClosedCategories, (categoryId) =>
-    closedCategories.has(categoryId)
-  );
 
   return (
     <PageNav>
@@ -308,7 +308,7 @@ export function Direct() {
                   return (
                     <VirtualTile
                       virtualItem={vItem}
-                      key={vItem.index}
+                      key={vItem.key}
                       ref={virtualizer.measureElement}
                     >
                       <div
@@ -333,11 +333,7 @@ export function Direct() {
                 const selected = selectedRoomId === item.roomId;
 
                 return (
-                  <VirtualTile
-                    virtualItem={vItem}
-                    key={vItem.index}
-                    ref={virtualizer.measureElement}
-                  >
+                  <VirtualTile virtualItem={vItem} key={vItem.key} ref={virtualizer.measureElement}>
                     <RoomNavItem
                       room={room}
                       selected={selected}

@@ -50,7 +50,6 @@ import { VirtualTile } from '../../../components/virtualizer';
 import { RoomNavCategoryButton, RoomNavItem } from '../../../features/room-nav';
 import { makeNavCategoryId } from '../../../state/closedNavCategories';
 import { roomToUnreadAtom } from '../../../state/room/roomToUnread';
-import { useCategoryHandler } from '../../../hooks/useCategoryHandler';
 import { useNavToActivePathMapper } from '../../../hooks/useNavToActivePathMapper';
 import { useRoomName } from '../../../hooks/useRoomMeta';
 import { useSpaceJoinedHierarchy } from '../../../hooks/useSpaceHierarchy';
@@ -60,13 +59,13 @@ import { usePowerLevels } from '../../../hooks/usePowerLevels';
 import { useRecursiveChildScopeFactory, useSpaceChildren } from '../../../state/hooks/roomList';
 import { roomToParentsAtom } from '../../../state/room/roomToParents';
 import { markAsRead } from '../../../utils/notifications';
-import { archivedRoomsAtom, favouriteRoomsAtom } from '../../../state/room/favouriteRooms';
+import { archivedRoomsAtom, favouriteRoomsAtom } from '../../../state/room/taggedRooms';
 import { activitySortedSpacesAtom } from '../../../state/spaceRoomSort';
 import { useRoomsUnread } from '../../../state/hooks/unread';
 import { UseStateProvider } from '../../../components/UseStateProvider';
 import { LeaveSpacePrompt } from '../../../components/leave-space-prompt';
 import { copyToClipboard } from '../../../utils/dom';
-import { useClosedNavCategoriesAtom } from '../../../state/hooks/closedNavCategories';
+import { useNavCategories } from '../../../state/hooks/closedNavCategories';
 import { useStateEvent } from '../../../hooks/useStateEvent';
 import { Membership, StateEvent } from '../../../../types/matrix/room';
 import { stopPropagation } from '../../../utils/keyboard';
@@ -401,8 +400,8 @@ export function SpaceTombstone({ roomId, replacementRoomId }: SpaceTombstoneProp
 }
 
 type SpaceNavEntry =
-  | { type: 'category'; id: string; name: string; closed: boolean; divider?: boolean }
-  | { type: 'room'; roomId: string };
+  | { type: 'category'; key: string; id: string; name: string; closed: boolean; divider?: boolean }
+  | { type: 'room'; key: string; roomId: string };
 
 export function Space() {
   const mx = useMatrixClient();
@@ -423,7 +422,7 @@ export function Space() {
   const searchSelected = useSpaceSearchSelected(spaceIdOrAlias);
   const callEmbed = useCallEmbed();
 
-  const [closedCategories, setClosedCategories] = useAtom(useClosedNavCategoriesAtom());
+  const { isClosed, handleCategoryClick } = useNavCategories();
 
   const getRoom = useCallback(
     (rId: string): Room | undefined => {
@@ -440,19 +439,16 @@ export function Space() {
     getRoom,
     useCallback(
       (parentId, roomId) => {
-        if (!closedCategories.has(makeNavCategoryId(space.roomId, parentId))) {
+        if (!isClosed(makeNavCategoryId(space.roomId, parentId))) {
           return false;
         }
         const showRoomAnyway =
           roomToUnread.has(roomId) || roomId === selectedRoomId || callEmbed?.roomId === roomId;
         return !showRoomAnyway;
       },
-      [space.roomId, closedCategories, roomToUnread, selectedRoomId, callEmbed]
+      [space.roomId, isClosed, roomToUnread, selectedRoomId, callEmbed]
     ),
-    useCallback(
-      (sId) => closedCategories.has(makeNavCategoryId(space.roomId, sId)),
-      [closedCategories, space.roomId]
-    )
+    useCallback((sId) => isClosed(makeNavCategoryId(space.roomId, sId)), [isClosed, space.roomId])
   );
 
   const favouriteRooms = useAtomValue(favouriteRoomsAtom);
@@ -471,11 +467,16 @@ export function Space() {
   // collapsed-by-default section at the bottom.
   const entries = useMemo(() => {
     const list: SpaceNavEntry[] = [];
+    // Room rows are keyed by category and room: in structure mode a room can be listed under
+    // several sub-spaces, and the key keeps per-row state (e.g. an open menu) on its room.
+    const pushCategory = (id: string, name: string, closed: boolean, divider?: boolean) =>
+      list.push({ type: 'category', key: id, id, name, closed, divider });
+    const pushRoom = (categoryId: string, roomId: string) =>
+      list.push({ type: 'room', key: makeNavCategoryId(categoryId, roomId), roomId });
     const pushRooms = (categoryId: string, name: string, roomIds: string[], archive = false) => {
       if (roomIds.length === 0) return;
-      // the archive is collapsed unless opened, so its id in closedCategories means "open"
-      const closed = archive ? !closedCategories.has(categoryId) : closedCategories.has(categoryId);
-      list.push({ type: 'category', id: categoryId, name, closed, divider: list.length > 0 });
+      const closed = isClosed(categoryId, archive);
+      pushCategory(categoryId, name, closed, list.length > 0);
       roomIds
         .sort(byActivity)
         .filter(
@@ -485,12 +486,11 @@ export function Space() {
             roomId === selectedRoomId ||
             callEmbed?.roomId === roomId
         )
-        .forEach((roomId) => list.push({ type: 'room', roomId }));
+        .forEach((roomId) => pushRoom(categoryId, roomId));
     };
 
-    const spaceRoomIds = descendants.filter((roomId) => !mx.getRoom(roomId)?.isSpaceRoom());
-    const roomIds = spaceRoomIds.filter((roomId) => !archivedRooms.has(roomId));
-    const archivedIds = spaceRoomIds.filter((roomId) => archivedRooms.has(roomId));
+    const roomIds = descendants.filter((roomId) => !archivedRooms.has(roomId));
+    const archivedIds = descendants.filter((roomId) => archivedRooms.has(roomId));
     const pushArchived = () =>
       pushRooms(
         makeNavCategoryId(space.roomId, 'archived'),
@@ -505,7 +505,7 @@ export function Space() {
     if (sortByActivity) {
       const otherIds = roomIds.filter((roomId) => !favouriteRooms.has(roomId));
       pushRooms(
-        makeNavCategoryId(space.roomId, space.roomId),
+        makeNavCategoryId(space.roomId, 'groups'),
         'Groups',
         otherIds.filter((roomId) => !mDirects.has(roomId))
       );
@@ -518,23 +518,37 @@ export function Space() {
       return list;
     }
 
+    let categoryId = space.roomId;
+    let section: { headerIndex: number; movedRooms: number } | undefined;
+    // A sub-space whose rooms all moved to Favourites or Archived has nothing left to list.
+    const dropEmptySection = () => {
+      if (section && section.movedRooms > 0 && list.length === section.headerIndex + 1) {
+        list.pop();
+      }
+      section = undefined;
+    };
+
     hierarchy.forEach(({ roomId }) => {
       const room = mx.getRoom(roomId);
       if (!room) return;
       if (room.isSpaceRoom()) {
-        const categoryId = makeNavCategoryId(space.roomId, roomId);
-        list.push({
-          type: 'category',
-          id: categoryId,
-          name: roomId === space.roomId ? 'Rooms' : room.name,
-          closed: closedCategories.has(categoryId),
-        });
+        dropEmptySection();
+        categoryId = makeNavCategoryId(space.roomId, roomId);
+        section = { headerIndex: list.length, movedRooms: 0 };
+        pushCategory(
+          categoryId,
+          roomId === space.roomId ? 'Rooms' : room.name,
+          isClosed(categoryId)
+        );
         return;
       }
-      if (!favouriteRooms.has(roomId) && !archivedRooms.has(roomId)) {
-        list.push({ type: 'room', roomId });
+      if (favouriteRooms.has(roomId) || archivedRooms.has(roomId)) {
+        if (section) section.movedRooms += 1;
+        return;
       }
+      pushRoom(categoryId, roomId);
     });
+    dropEmptySection();
     pushArchived();
     return list;
   }, [
@@ -546,7 +560,7 @@ export function Space() {
     archivedRooms,
     mDirects,
     sortByActivity,
-    closedCategories,
+    isClosed,
     roomToUnread,
     selectedRoomId,
     callEmbed,
@@ -556,13 +570,10 @@ export function Space() {
   const virtualizer = useVirtualizer({
     count: entries.length,
     getScrollElement: () => scrollRef.current,
+    getItemKey: (index) => entries[index].key,
     estimateSize: () => 0,
     overscan: 10,
   });
-
-  const handleCategoryClick = useCategoryHandler(setClosedCategories, (categoryId) =>
-    closedCategories.has(categoryId)
-  );
 
   const getToLink = (roomId: string) =>
     getSpaceRoomPath(spaceIdOrAlias, getCanonicalAliasOrRoomId(mx, roomId));
@@ -624,11 +635,7 @@ export function Space() {
 
               if (entry.type === 'category') {
                 return (
-                  <VirtualTile
-                    virtualItem={vItem}
-                    key={vItem.index}
-                    ref={virtualizer.measureElement}
-                  >
+                  <VirtualTile virtualItem={vItem} key={vItem.key} ref={virtualizer.measureElement}>
                     <div style={{ paddingTop: vItem.index === 0 ? undefined : config.space.S400 }}>
                       {entry.divider && (
                         <Line
@@ -656,7 +663,7 @@ export function Space() {
               if (!room) return null;
 
               return (
-                <VirtualTile virtualItem={vItem} key={vItem.index} ref={virtualizer.measureElement}>
+                <VirtualTile virtualItem={vItem} key={vItem.key} ref={virtualizer.measureElement}>
                   <RoomNavItem
                     room={room}
                     selected={selectedRoomId === roomId}

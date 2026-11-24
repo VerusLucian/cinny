@@ -16,7 +16,7 @@ import {
   toRem,
 } from 'folds';
 import { useVirtualizer } from '@tanstack/react-virtual';
-import { useAtom, useAtomValue } from 'jotai';
+import { useAtomValue } from 'jotai';
 import FocusTrap from 'focus-trap-react';
 import {
   NavButton,
@@ -48,15 +48,14 @@ import { VirtualTile } from '../../../components/virtualizer';
 import { RoomNavCategoryButton, RoomNavItem } from '../../../features/room-nav';
 import { makeNavCategoryId } from '../../../state/closedNavCategories';
 import { roomToUnreadAtom } from '../../../state/room/roomToUnread';
-import { archivedRoomsAtom, favouriteRoomsAtom } from '../../../state/room/favouriteRooms';
+import { archivedRoomsAtom, favouriteRoomsAtom } from '../../../state/room/taggedRooms';
 import { allRoomsAtom } from '../../../state/room-list/roomList';
 import { mDirectAtom } from '../../../state/mDirectList';
-import { useCategoryHandler } from '../../../hooks/useCategoryHandler';
 import { useNavToActivePathMapper } from '../../../hooks/useNavToActivePathMapper';
 import { PageNav, PageNavHeader, PageNavContent } from '../../../components/page';
 import { useRoomsUnread } from '../../../state/hooks/unread';
 import { markAsRead } from '../../../utils/notifications';
-import { useClosedNavCategoriesAtom } from '../../../state/hooks/closedNavCategories';
+import { useNavCategories } from '../../../state/hooks/closedNavCategories';
 import { stopPropagation } from '../../../utils/keyboard';
 import { useSetting } from '../../../state/hooks/settings';
 import { settingsAtom } from '../../../state/settings';
@@ -198,7 +197,7 @@ function HomeEmpty() {
 
 const DEFAULT_CATEGORY_ID = makeNavCategoryId('home', 'room');
 const FAVOURITE_CATEGORY_ID = makeNavCategoryId('home', 'favourite');
-// collapsed unless opened: presence in closedCategories means "open"
+// collapsed by default
 const ARCHIVED_CATEGORY_ID = makeNavCategoryId('home', 'archived');
 
 type HomeVirtualItem =
@@ -221,7 +220,7 @@ export function Home() {
   const selectedRoomId = useSelectedRoom();
   const createRoomSelected = useHomeCreateSelected();
   const searchSelected = useHomeSearchSelected();
-  const [closedCategories, setClosedCategories] = useAtom(useClosedNavCategoriesAtom());
+  const { isClosed, handleCategoryClick } = useNavCategories();
 
   const favouriteRoomIds = useMemo(
     () =>
@@ -259,7 +258,7 @@ export function Home() {
     const items: HomeVirtualItem[] = [];
 
     if (favouriteRoomIds.length > 0) {
-      const closed = closedCategories.has(FAVOURITE_CATEGORY_ID);
+      const closed = isClosed(FAVOURITE_CATEGORY_ID);
       items.push({ type: 'category', id: FAVOURITE_CATEGORY_ID, name: 'Favourites', closed });
       makeRoomList(favouriteRoomIds, closed).forEach((roomId) =>
         items.push({ type: 'room', roomId })
@@ -267,13 +266,13 @@ export function Home() {
     }
 
     if (otherRoomIds.length > 0 || favouriteRoomIds.length === 0) {
-      const closed = closedCategories.has(DEFAULT_CATEGORY_ID);
+      const closed = isClosed(DEFAULT_CATEGORY_ID);
       items.push({ type: 'category', id: DEFAULT_CATEGORY_ID, name: 'Rooms', closed });
       makeRoomList(otherRoomIds, closed).forEach((roomId) => items.push({ type: 'room', roomId }));
     }
 
     if (archivedRoomIds.length > 0) {
-      const closed = !closedCategories.has(ARCHIVED_CATEGORY_ID);
+      const closed = isClosed(ARCHIVED_CATEGORY_ID, true);
       items.push({
         type: 'category',
         id: ARCHIVED_CATEGORY_ID,
@@ -291,7 +290,7 @@ export function Home() {
     favouriteRoomIds,
     otherRoomIds,
     archivedRoomIds,
-    closedCategories,
+    isClosed,
     roomToUnread,
     selectedRoomId,
     byActivity,
@@ -300,13 +299,14 @@ export function Home() {
   const virtualizer = useVirtualizer({
     count: virtualItems.length,
     getScrollElement: () => scrollRef.current,
+    // key rows by content, so per-row state (e.g. an open menu) never moves to another room
+    getItemKey: (index) => {
+      const item = virtualItems[index];
+      return item.type === 'category' ? item.id : item.roomId;
+    },
     estimateSize: () => 38,
     overscan: 10,
   });
-
-  const handleCategoryClick = useCategoryHandler(setClosedCategories, (categoryId) =>
-    closedCategories.has(categoryId)
-  );
 
   return (
     <PageNav>
@@ -402,7 +402,7 @@ export function Home() {
                   return (
                     <VirtualTile
                       virtualItem={vItem}
-                      key={vItem.index}
+                      key={vItem.key}
                       ref={virtualizer.measureElement}
                     >
                       <div
@@ -427,11 +427,7 @@ export function Home() {
                 const selected = selectedRoomId === item.roomId;
 
                 return (
-                  <VirtualTile
-                    virtualItem={vItem}
-                    key={vItem.index}
-                    ref={virtualizer.measureElement}
-                  >
+                  <VirtualTile virtualItem={vItem} key={vItem.key} ref={virtualizer.measureElement}>
                     <RoomNavItem
                       room={room}
                       selected={selected}
