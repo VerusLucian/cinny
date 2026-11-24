@@ -1,12 +1,11 @@
 import { createContext, useCallback, useContext, useMemo } from 'react';
-import { ConditionKind, IPushRules, MatrixClient, MatrixError, PushRuleKind } from 'matrix-js-sdk';
+import { ConditionKind, IPushRules, MatrixClient, PushRuleKind } from 'matrix-js-sdk';
 import { Icons, IconSrc } from 'folds';
 import {
   AccountDataEvent,
   SPACE_MUTE_ACCOUNT_DATA,
   SpaceMuteContent,
 } from '../../types/matrix/accountData';
-import { ErrorCode } from '../cs-errorcode';
 import { useAccountData } from './useAccountData';
 import { isRoomId } from '../utils/matrix';
 import {
@@ -124,12 +123,43 @@ const addRoomMuteRule = (mx: MatrixClient, roomId: string) =>
     actions: getNotificationModeActions(NotificationMode.OFF),
   });
 
-const deletePushRuleIfExists = async (mx: MatrixClient, kind: PushRuleKind, roomId: string) => {
-  try {
-    await mx.deletePushRule('global', kind, roomId);
-  } catch (e) {
-    if (!(e instanceof MatrixError && e.errcode === ErrorCode.M_NOT_FOUND)) throw e;
-  }
+const hasRoomRule = (mx: MatrixClient, roomId: string): boolean =>
+  (mx.pushRules?.global?.room ?? []).some((rule) => rule.rule_id === roomId);
+
+const isSpaceMuteContent = (content: object): content is SpaceMuteContent =>
+  Object.values(content).every(
+    (roomIds) => Array.isArray(roomIds) && roomIds.every((id) => typeof id === 'string')
+  );
+
+const getSpaceMuteContent = (mx: MatrixClient): SpaceMuteContent => {
+  const stored: object | undefined = mx.getAccountData(SPACE_MUTE_ACCOUNT_DATA)?.getContent();
+  return stored && isSpaceMuteContent(stored) ? stored : {};
+};
+
+/** Copy of the record without `roomIds`; spaces left without recorded rooms are dropped. */
+const withoutRecordedRooms = (
+  content: SpaceMuteContent,
+  roomIds: ReadonlySet<string>
+): SpaceMuteContent => {
+  const result: SpaceMuteContent = {};
+  Object.entries(content).forEach(([spaceId, recorded]) => {
+    const remaining = recorded.filter((roomId) => !roomIds.has(roomId));
+    if (remaining.length > 0) result[spaceId] = remaining;
+  });
+  return result;
+};
+
+/**
+ * A room whose notification setting is changed individually is no longer owned by the space
+ * mute, so "Unmute Rooms" must not touch it afterwards.
+ */
+const forgetSpaceMute = async (mx: MatrixClient, roomId: string) => {
+  const content = getSpaceMuteContent(mx);
+  if (!Object.values(content).some((recorded) => recorded.includes(roomId))) return;
+  await mx.setAccountData(
+    SPACE_MUTE_ACCOUNT_DATA,
+    withoutRecordedRooms(content, new Set([roomId]))
+  );
 };
 
 export const setRoomNotificationPreference = async (
@@ -138,6 +168,10 @@ export const setRoomNotificationPreference = async (
   mode: RoomNotificationMode,
   previousMode: RoomNotificationMode
 ): Promise<void> => {
+  if (previousMode === RoomNotificationMode.Mute || mode === RoomNotificationMode.Mute) {
+    await forgetSpaceMute(mx, roomId);
+  }
+
   // remove the old preference
   if (
     previousMode === RoomNotificationMode.AllMessages ||
@@ -148,8 +182,8 @@ export const setRoomNotificationPreference = async (
   if (previousMode === RoomNotificationMode.Mute) {
     await mx.deletePushRule('global', PushRuleKind.Override, roomId);
     // A room muted together with its space keeps its own room rule underneath the mute.
-    if (mode === RoomNotificationMode.Unset) {
-      await deletePushRuleIfExists(mx, PushRuleKind.RoomSpecific, roomId);
+    if (mode === RoomNotificationMode.Unset && hasRoomRule(mx, roomId)) {
+      await mx.deletePushRule('global', PushRuleKind.RoomSpecific, roomId);
     }
   }
 
@@ -194,11 +228,6 @@ const runSequentially = (roomIds: string[], action: (roomId: string) => Promise<
     await action(roomId);
   }, Promise.resolve());
 
-const isSpaceMuteContent = (content: object): content is SpaceMuteContent =>
-  Object.values(content).every(
-    (roomIds) => Array.isArray(roomIds) && roomIds.every((id) => typeof id === 'string')
-  );
-
 /**
  * Mute or unmute every room of a space at once.
  * Muting only adds an override rule, so per-room "All Messages" / "Mention & Keywords" rules
@@ -214,8 +243,7 @@ export const useToggleSpaceMute = (spaceId: string, roomIds: string[]) => {
 
   const [toggleState, toggleMute] = useAsyncCallback(
     useCallback(async () => {
-      const stored: object | undefined = mx.getAccountData(SPACE_MUTE_ACCOUNT_DATA)?.getContent();
-      const content: SpaceMuteContent = stored && isSpaceMuteContent(stored) ? stored : {};
+      const content = getSpaceMuteContent(mx);
       const recorded = content[spaceId];
 
       if (!allMuted) {
@@ -229,12 +257,18 @@ export const useToggleSpaceMute = (spaceId: string, roomIds: string[]) => {
         return;
       }
 
-      // without a record (muted by an older version or by hand) unmute every room of the space
-      const toUnmute = (recorded ?? roomIds).filter((roomId) => preferences.mute.has(roomId));
-      await runSequentially(toUnmute, (roomId) =>
-        deletePushRuleIfExists(mx, PushRuleKind.Override, roomId)
+      // Unmute what the space muted. Without a record (muted by an older version) or when none
+      // of its rooms is still muted by the space, every room was muted by hand and the whole
+      // space is unmuted at once, so a single click always has the same effect.
+      const spaceRoomIds = new Set(roomIds);
+      const mutedBySpace = (recorded ?? []).filter(
+        (roomId) => spaceRoomIds.has(roomId) && preferences.mute.has(roomId)
       );
-      const newContent: SpaceMuteContent = { ...content };
+      const toUnmute = mutedBySpace.length > 0 ? mutedBySpace : roomIds;
+      await runSequentially(toUnmute, (roomId) =>
+        mx.deletePushRule('global', PushRuleKind.Override, roomId)
+      );
+      const newContent = withoutRecordedRooms(content, new Set(toUnmute));
       delete newContent[spaceId];
       await mx.setAccountData(SPACE_MUTE_ACCOUNT_DATA, newContent);
     }, [mx, spaceId, roomIds, preferences, allMuted])
