@@ -332,12 +332,12 @@ export function Search({ requestClose }: SearchProps) {
                           radii="400"
                           after={
                             <Box gap="100">
-                              {dmUserServer && (
+                              {dmUserServer && !perfectOrphanParent && (
                                 <Text size="T200" priority="300" truncate>
                                   <b>{dmUserServer}</b>
                                 </Text>
                               )}
-                              {!dm && perfectOrphanParent && (
+                              {perfectOrphanParent && (
                                 <Text size="T200" priority="300" truncate>
                                   <b>{getRoom(perfectOrphanParent)?.name ?? perfectOrphanParent}</b>
                                 </Text>
