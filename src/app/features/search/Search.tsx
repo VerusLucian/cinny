@@ -26,6 +26,7 @@ import React, {
   useState,
 } from 'react';
 import { isKeyHotkey } from 'is-hotkey';
+import { matchPath, useLocation } from 'react-router-dom';
 import { useAtom, useAtomValue } from 'jotai';
 import { Room } from 'matrix-js-sdk';
 import { useDirects, useOrphanSpaces, useRooms, useSpaces } from '../../state/hooks/roomList';
@@ -50,11 +51,18 @@ import { factoryRoomIdByActivity } from '../../utils/sort';
 import { nameInitials } from '../../utils/common';
 import { useRoomNavigate } from '../../hooks/useRoomNavigate';
 import { useListFocusIndex } from '../../hooks/useListFocusIndex';
-import { getMxIdLocalPart, getMxIdServer, guessDmRoomUserId } from '../../utils/matrix';
+import {
+  getCanonicalAliasRoomId,
+  getMxIdLocalPart,
+  getMxIdServer,
+  guessDmRoomUserId,
+  isRoomAlias,
+} from '../../utils/matrix';
+import { SPACE_PATH } from '../../pages/paths';
 import { roomToParentsAtom } from '../../state/room/roomToParents';
 import { roomToUnreadAtom } from '../../state/room/roomToUnread';
 import { UnreadBadge, UnreadBadgeCenter } from '../../components/unread-badge';
-import { searchModalAtom } from '../../state/searchModal';
+import { searchModalAtom, searchScopeAtom } from '../../state/searchModal';
 import { useKeyDown } from '../../hooks/useKeyDown';
 import { useMediaAuthentication } from '../../hooks/useMediaAuthentication';
 import { KeySymbol } from '../../utils/key-symbol';
@@ -133,8 +141,10 @@ const SEARCH_OPTIONS: UseAsyncSearchOptions = {
 
 type SearchProps = {
   requestClose: () => void;
+  /** Limit results to the rooms and direct messages of this space (including sub-spaces). */
+  scopeSpaceId?: string;
 };
-export function Search({ requestClose }: SearchProps) {
+export function Search({ requestClose, scopeSpaceId }: SearchProps) {
   const mx = useMatrixClient();
   const useAuthentication = useMediaAuthentication();
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -150,9 +160,16 @@ export function Search({ requestClose }: SearchProps) {
   const roomToParents = useAtomValue(roomToParentsAtom);
   const orphanSpaces = useOrphanSpaces(mx, allRoomsAtom, roomToParents);
   const mDirects = useAtomValue(mDirectAtom);
-  const rooms = useRooms(mx, allRoomsAtom, mDirects);
-  const spaces = useSpaces(mx, allRoomsAtom);
-  const directs = useDirects(mx, allRoomsAtom, mDirects);
+  const allRooms = useRooms(mx, allRoomsAtom, mDirects);
+  const allSpaces = useSpaces(mx, allRoomsAtom);
+  const allDirects = useDirects(mx, allRoomsAtom, mDirects);
+
+  const [rooms, spaces, directs] = useMemo(() => {
+    if (!scopeSpaceId) return [allRooms, allSpaces, allDirects];
+    const inScope = (roomId: string) => getAllParents(roomToParents, roomId).has(scopeSpaceId);
+    return [allRooms.filter(inScope), allSpaces.filter(inScope), allDirects.filter(inScope)];
+  }, [scopeSpaceId, roomToParents, allRooms, allSpaces, allDirects]);
+  const scopeName = scopeSpaceId ? getRoom(scopeSpaceId)?.name : undefined;
 
   const topActiveRooms = useTopActiveRooms(searchRoomType, rooms, directs, spaces);
   const targetRooms = useSearchTargetRooms(searchRoomType, rooms, directs, spaces);
@@ -269,7 +286,7 @@ export function Search({ requestClose }: SearchProps) {
                 variant="Background"
                 radii="400"
                 outlined
-                placeholder="Search"
+                placeholder={scopeName ? `Search in ${scopeName}` : 'Search'}
                 before={<Icon size="200" src={Icons.Search} />}
                 onChange={handleInputChange}
                 onKeyDown={handleInputKeyDown}
@@ -410,7 +427,8 @@ export function Search({ requestClose }: SearchProps) {
             <Box shrink="No" justifyContent="Center" style={{ padding: config.space.S200 }}>
               <Text size="T200" priority="300">
                 Type <b>#</b> for rooms, <b>@</b> for DMs and <b>*</b> for spaces. Hotkey:{' '}
-                <b>{isMacOS() ? KeySymbol.Command : 'Ctrl'} + k</b>
+                <b>{isMacOS() ? KeySymbol.Command : 'Ctrl'} + k</b>, <b>Shift Shift</b> for the
+                current space
               </Text>
             </Box>
           </Modal>
@@ -420,8 +438,44 @@ export function Search({ requestClose }: SearchProps) {
   );
 }
 
+/** Joined space currently open in the URL (/:spaceIdOrAlias/...), if any. */
+const useOpenSpaceId = (): string | undefined => {
+  const mx = useMatrixClient();
+  const { pathname } = useLocation();
+  const spaceIdOrAlias = matchPath({ path: SPACE_PATH, end: false }, pathname)?.params
+    .spaceIdOrAlias;
+  if (!spaceIdOrAlias) return undefined;
+  const roomId = isRoomAlias(spaceIdOrAlias)
+    ? getCanonicalAliasRoomId(mx, spaceIdOrAlias)
+    : spaceIdOrAlias;
+  return roomId && mx.getRoom(roomId)?.isSpaceRoom() ? roomId : undefined;
+};
+
+// Max gap between the two Shift presses of the quick switcher hotkey.
+const DOUBLE_SHIFT_MS = 400;
+
 export function SearchModalRenderer() {
   const [opened, setOpen] = useAtom(searchModalAtom);
+  const [scope, setScope] = useAtom(searchScopeAtom);
+  const openSpaceId = useOpenSpaceId();
+  const lastShiftRef = useRef(0);
+
+  const toggle = useCallback(
+    (scopeSpaceId: string | undefined) => {
+      if (opened) {
+        setOpen(false);
+        setScope(undefined);
+        return;
+      }
+      const portalContainer = document.getElementById('portalContainer');
+      if (portalContainer && portalContainer.children.length > 0) {
+        return;
+      }
+      setScope(scopeSpaceId);
+      setOpen(true);
+    },
+    [opened, setOpen, setScope]
+  );
 
   useKeyDown(
     window,
@@ -429,21 +483,41 @@ export function SearchModalRenderer() {
       (event) => {
         if (isKeyHotkey('mod+k', event)) {
           event.preventDefault();
-          if (opened) {
-            setOpen(false);
-            return;
-          }
-
-          const portalContainer = document.getElementById('portalContainer');
-          if (portalContainer && portalContainer.children.length > 0) {
-            return;
-          }
-          setOpen(true);
+          toggle(undefined);
+          return;
         }
+        // Shift pressed twice on its own: search the open space (everything outside spaces).
+        const loneShift =
+          event.key === 'Shift' &&
+          !event.repeat &&
+          !event.ctrlKey &&
+          !event.metaKey &&
+          !event.altKey;
+        if (!loneShift) {
+          lastShiftRef.current = 0;
+          return;
+        }
+        const now = Date.now();
+        if (now - lastShiftRef.current <= DOUBLE_SHIFT_MS) {
+          lastShiftRef.current = 0;
+          toggle(openSpaceId);
+          return;
+        }
+        lastShiftRef.current = now;
       },
-      [opened, setOpen]
+      [toggle, openSpaceId]
     )
   );
 
-  return opened && <Search requestClose={() => setOpen(false)} />;
+  return (
+    opened && (
+      <Search
+        scopeSpaceId={scope}
+        requestClose={() => {
+          setOpen(false);
+          setScope(undefined);
+        }}
+      />
+    )
+  );
 }
