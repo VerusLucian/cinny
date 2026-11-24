@@ -62,8 +62,9 @@ import { SPACE_PATH } from '../../pages/paths';
 import { roomToParentsAtom } from '../../state/room/roomToParents';
 import { roomToUnreadAtom } from '../../state/room/roomToUnread';
 import { UnreadBadge, UnreadBadgeCenter } from '../../components/unread-badge';
-import { searchModalAtom, searchScopeAtom } from '../../state/searchModal';
+import { searchModalAtom } from '../../state/searchModal';
 import { useKeyDown } from '../../hooks/useKeyDown';
+import { useDoubleShift } from '../../hooks/useDoubleShift';
 import { useMediaAuthentication } from '../../hooks/useMediaAuthentication';
 import { KeySymbol } from '../../utils/key-symbol';
 import { isMacOS } from '../../utils/user-agent';
@@ -451,30 +452,23 @@ const useOpenSpaceId = (): string | undefined => {
   return roomId && mx.getRoom(roomId)?.isSpaceRoom() ? roomId : undefined;
 };
 
-// Max gap between the two Shift presses of the quick switcher hotkey.
-const DOUBLE_SHIFT_MS = 400;
-
 export function SearchModalRenderer() {
-  const [opened, setOpen] = useAtom(searchModalAtom);
-  const [scope, setScope] = useAtom(searchScopeAtom);
+  const [{ open, scopeSpaceId }, setModal] = useAtom(searchModalAtom);
   const openSpaceId = useOpenSpaceId();
-  const lastShiftRef = useRef(0);
 
   const toggle = useCallback(
-    (scopeSpaceId: string | undefined) => {
-      if (opened) {
-        setOpen(false);
-        setScope(undefined);
+    (scope: string | undefined) => {
+      if (open) {
+        setModal({ open: false });
         return;
       }
       const portalContainer = document.getElementById('portalContainer');
       if (portalContainer && portalContainer.children.length > 0) {
         return;
       }
-      setScope(scopeSpaceId);
-      setOpen(true);
+      setModal({ open: true, scopeSpaceId: scope });
     },
-    [opened, setOpen, setScope]
+    [open, setModal]
   );
 
   useKeyDown(
@@ -484,40 +478,16 @@ export function SearchModalRenderer() {
         if (isKeyHotkey('mod+k', event)) {
           event.preventDefault();
           toggle(undefined);
-          return;
         }
-        // Shift pressed twice on its own: search the open space (everything outside spaces).
-        const loneShift =
-          event.key === 'Shift' &&
-          !event.repeat &&
-          !event.ctrlKey &&
-          !event.metaKey &&
-          !event.altKey;
-        if (!loneShift) {
-          lastShiftRef.current = 0;
-          return;
-        }
-        const now = Date.now();
-        if (now - lastShiftRef.current <= DOUBLE_SHIFT_MS) {
-          lastShiftRef.current = 0;
-          toggle(openSpaceId);
-          return;
-        }
-        lastShiftRef.current = now;
       },
-      [toggle, openSpaceId]
+      [toggle]
     )
   );
 
+  // Shift pressed twice on its own: search the open space (everything outside spaces).
+  useDoubleShift(() => toggle(openSpaceId));
+
   return (
-    opened && (
-      <Search
-        scopeSpaceId={scope}
-        requestClose={() => {
-          setOpen(false);
-          setScope(undefined);
-        }}
-      />
-    )
+    open && <Search scopeSpaceId={scopeSpaceId} requestClose={() => setModal({ open: false })} />
   );
 }

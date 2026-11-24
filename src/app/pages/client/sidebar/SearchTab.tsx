@@ -5,9 +5,9 @@ import { SidebarAvatar, SidebarItem, SidebarItemTooltip } from '../../../compone
 import { searchModalAtom } from '../../../state/searchModal';
 
 export function SearchTab() {
-  const [opened, setOpen] = useAtom(searchModalAtom);
+  const [{ open: opened }, setModal] = useAtom(searchModalAtom);
 
-  const open = () => setOpen(true);
+  const open = () => setModal({ open: true });
 
   return (
     <SidebarItem active={opened}>

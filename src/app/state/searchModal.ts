@@ -1,6 +1,9 @@
 import { atom } from 'jotai';
 
-export const searchModalAtom = atom<boolean>(false);
+export type SearchModalState = {
+  open: boolean;
+  /** Space the search is limited to (quick switcher opened from a space); undefined searches all. */
+  scopeSpaceId?: string;
+};
 
-/** Space the search is limited to (quick switcher opened from a space); undefined searches all. */
-export const searchScopeAtom = atom<string | undefined>(undefined);
+export const searchModalAtom = atom<SearchModalState>({ open: false });
